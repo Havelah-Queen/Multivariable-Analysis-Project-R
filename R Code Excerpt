@@ -1,0 +1,232 @@
+
+setwd("C:\\Users\\smart\\OneDrive\\BS806Multivariate\\Project_Multvar")
+
+library(ggcorrplot)
+library(haven)
+library(tidyverse)
+library(gt)
+library(gtable)
+library(MASS)
+library(gtsummary)
+library(moments)
+library(olsrr)
+library(GGally)
+library(corrplot)
+library(ggrepel)
+library(RColorBrewer)
+
+#Data Prep
+
+load("Dig2_NoAngina.RData")
+#Covert to factors
+dig.2[, c( "EJFMETH","RALES","ELEVJVP","PEDEMA","RESTDYS","EXERTDYS","ACTLIMIT","S3","PULCONG","FUNCTCLS","CHFETIOL","PREVMI","DIABETES","HYPERTEN","DIGUSE","DIURETK","DIURET","ACEINHIB","KSUPP","NITRATES","HYDRAL","VASOD")]<-lapply(dig.2[,c("EJFMETH","RALES","ELEVJVP","PEDEMA","RESTDYS","EXERTDYS","ACTLIMIT","S3","PULCONG","FUNCTCLS","CHFETIOL","PREVMI","DIABETES","HYPERTEN","DIGUSE","DIURETK","DIURET","ACEINHIB","KSUPP","NITRATES","HYDRAL","VASOD")],factor)
+head(dig.2)
+sapply(dig.2, class)
+names(dig.2)
+#dig.2<-dig.2[,-9]
+#dig.2<-dig.2[,-39]
+any(is.na(dig.2))
+#dig.2<-na.omit(dig.2)
+dig.2.numeric<-dig.2|> select_if(is.numeric)
+sapply(dig.2.numeric,class)
+
+#Change log labels
+dig.2.numeric<-dig.2.numeric%>%
+    rename(
+      CREAT=logcreat,
+      BMI=logBMI,
+      CHFDUR=logCHFDUR)
+names(dig.2.numeric)
+
+#Correlation 
+corr_matrix_2<-cor(dig.2.numeric)
+
+corrplot_dig2<-ggcorrplot(corr_matrix_2, lab = TRUE, lab_size = 4,colors = c("#B2DF8A","white", "#1F78B4"))+
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1,color="#0b3b5c"),
+        axis.text.y = element_text(size = 10,color="#0b3b5c"))
+
+#PCA
+pca_dig2<-prcomp(dig.2.numeric,scale=T ) 
+pca_dig2
+summary(pca_dig2) #PC 10 0.85
+
+#Making BIPLOT with GGplot
+
+pca_data2 <- data.frame(PC1 = pca_dig2$rotation[, 1], 
+                       PC2 = pca_dig2$rotation[, 2],
+                       Variable = rownames(pca_dig2$rotation))
+
+biplot_2<-ggplot(pca_data2, aes(x = PC1, y = PC2)) +
+  geom_segment(aes(x = 0, y = 0, xend = PC1, yend = PC2),
+               arrow = arrow(type = "open", length = unit(0.2, "cm")), 
+               color = "#B2DF8A", size = 1,lineend = "butt",
+               linejoin = "mitre") +
+  geom_text_repel(aes(label = Variable),box.padding = 0.2, vjust = 1.5, color = "black", size = 3) +  # Add variable names
+  labs(title = "PCA Loadings", x = "PC1", y = "PC2") +
+  scale_x_continuous(breaks = seq(-1, 1, by = 0.1), expand = c(0.05, 0.05)) +
+  scale_y_continuous(breaks = seq(-1, 1, by = 0.1), expand = c(0.05, 0.05)) +
+  theme_minimal() +
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 12,color ="#095b03"), 
+        axis.text = element_text(size = 10,color="#095b03"),
+        plot.title =element_text(size = 12, hjust = 0.5,color ="#095b03"),
+        panel.border = element_rect(color = "#095b03", fill = NA, size = 1))
+
+#K Means Elbows
+dim(dig.2.numeric)
+wss_dig2<-c()
+for (i in 1:10) {
+  km_dig2<-kmeans(dig.2.numeric,i)
+  wss_dig2<-c(wss_dig2,km_dig2$tot.withinss)}
+length(wss_dig2)
+
+#basic plot
+plot(c(1:10),wss_dig2,type="l")
+axis(1, at=1:10, labels=1:10)
+
+#GG plot Elbow
+wss_data <- data.frame(
+  Clusters = 1:10,
+  WSS = wss_dig2)
+
+elbow_plot<-ggplot(wss_data, aes(x = Clusters, y = WSS)) +
+  geom_line(color = "#A6CEE3", size = 1) +
+  geom_point(data = subset(wss_data, Clusters %in% c(2)), aes(x = Clusters, y = WSS),shape = 21, color = "#1F78B4", fill = NA, size = 5, stroke = 1) +
+  scale_x_continuous(breaks = seq(1, 10, by = 1))+
+  scale_y_continuous(breaks = pretty(range(wss_data$WSS), n = 5))+
+  labs(
+    title = "Elbow Method for Optimal Clusters",
+    x = "Number of Clusters (k)",
+    y = "WSS") +
+  theme_minimal()+
+  theme(
+    plot.title =element_text(size = 12, hjust = 0.5,color ="#0b3b5c"),
+    axis.title = element_text(size = 12,color ="#0b3b5c"), 
+    axis.text = element_text(size = 10,color="#0b3b5c"),
+    panel.border = element_rect(color = "#0b3b5c", fill = NA, size = 1),
+    panel.grid.major.x = element_line())
+
+#Kmeans Clusters
+set.seed(5)
+km2_dig2<-kmeans(dig.2.numeric,2)
+km2_dig2
+km2_dig2$centers
+
+
+combined_k2_dig2<-data.frame(PC1=pca_dig2$x[,1], PC2=pca_dig2$x[,2],Cluster=as.factor(km2_dig2$cluster))
+head(combined_k4_dig2)
+
+cluster_plot<-ggplot(combined_k2_dig2,aes(x=PC1,y=PC2,color=Cluster))+
+  geom_point(size=1.5)+
+   scale_color_manual(values=c("#33A02C","#B2DF8A"))+
+   scale_x_continuous(breaks = seq(-6, 6, by = 2),limits = c(-6, 6))+
+   scale_y_continuous(breaks =seq(-6, 6, by = 2),limits = c(-6, 6))+
+  labs(title = "K-Means Clustering")+
+  theme_minimal()+
+  theme( 
+    legend.title = element_text(color ="#095b03"),
+    legend.text = element_text(color ="#095b03"),
+    axis.title = element_text(size = 12,color ="#095b03"), 
+    axis.text = element_text(size = 10,color="#095b03"),
+    plot.title =element_text(size = 12, hjust = 0.5,color ="#095b03"),
+    panel.border = element_rect(color = "#095b03", fill = NA, size = 1))
+
+##Variable Selection
+
+#AIC,forward selection
+selection_names <- c(colnames(dig.2)[1:34], colnames(dig.2)[36:38])
+f <- as.formula(paste("~", paste(selection_names, collapse = " + ")))
+f
+set.seed(3)
+m0<-glm(CVD~1,data = dig.2,family=binomial) 
+m1<-glm(CVD~.,data = dig.2,family = binomial)
+m.AIC_fwd<-step(m0, scope=f,direction = "forward", k=2, trace = TRUE)
+summary(m.AIC_fwd)$coefficients
+#"FUNCTCLS","CHESTX", "CHFETIOL","KSUPP", "DIGUSE", "TRTMT","EJF_PER", "DIURET", "CHFDUR","RACE", "NSYM"
+#Different from other model, added CHDUR
+
+#AIC backwards
+m.AIC_bwd<-step(m1, scope=f,direction = "backward", k=2, trace = TRUE)
+summary(m.AIC_bwd)$coefficients
+#same results as forward
+
+#BIC forward
+set.seed(3)
+n<- nrow(dig.2)
+m.BIC_fwd<-step(m0, scope=f,direction = "forward", k=log(n), trace = TRUE)
+summary(m.BIC_fwd)$coefficients
+#"CHESTX",FUNCTCLS,DIGUSE,KSUPP,TRTMT,EJF_PER
+
+#BIC Backwards
+m.BIC_bwd<-step(m1, scope=f,direction = "backward", k=log(n), trace = TRUE)
+summary(m.BIC_bwd)$coefficients
+#same results
+
+#Models
+AIC_fit<-glm(CVD~CHESTX+FUNCTCLS+DIGUSE+KSUPP+TRTMT+EJF_PER+CHFETIOL+DIURET+logCHFDUR+RACE+NSYM,data = dig.2,family = "binomial")
+summary(AIC_fit)
+
+BIC_fit<-glm(CVD~CHESTX+FUNCTCLS+DIGUSE+KSUPP+TRTMT+EJF_PER,data = dig.2,family = "binomial")
+summary(BIC_fit)
+
+#AIC/BIC Track Plots
+
+aic_values <- c(7365.07, 7307.36, 7274.53, 7249.03, 7221.84, 7200.46, 7189.14, 7179.67, 7174.41,7171.02, 7169.45,7169.32)
+#Int+FUNCTCLS+CHESTX+ CHFETIOL+ KSUPP+ DIGUSE + TRTMT+EJF_PER+ DIURET+logCHFDUR+ RACE+ NSYM
+
+stepsAIC <- 0:11
+var_addedAIC<-c("Intercept","FUNCTCLS","CHESTX", "CHFETIOL","KSUPP", "DIGUSE", "TRTMT","EJF_PER", "DIURET","CHFDUR", "RACE", "NSYM")
+
+
+aic_df <- data.frame(Step = stepsAIC, AIC = aic_values, Var=var_addedAIC)
+
+aic_plot<-ggplot(aic_df, aes(x = Step, y = AIC)) +
+  geom_line(color = "#B2DF8A",size=1) +  
+  geom_point(color = "#33A02C", size = 2) + 
+  geom_text_repel(
+    aes(label = paste( round(AIC, 1), Var)), 
+    box.padding = 0.2,
+    max.overlaps = Inf,
+    direction = "x",
+    hjust =0, vjust=0,color = "black", size = 3) + 
+  labs(
+    title = "AIC Forward Selection",
+    x = "Step Number (Variables Added)",
+    y = "AIC Value") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 12, by = 1))+
+  theme(
+    axis.text = element_text(size = 12, color ="#095b03" ), 
+    axis.title = element_text(size = 14, color = "#095b03"), 
+    plot.title = element_text(hjust = 0.5, size = 16,color = "#095b03"),
+    panel.border = element_rect(color = "black", fill = NA, size = 1))
+
+
+bic_values <- c(7371.65, 7330.88, 7307.43, 7289.14, 7276.52, 7270.99, 7270.36)
+#Int+CHESTX+ FUNCTCLS+ DIGUSE + KSUPP+TRTMT+EJF_PER
+
+steps_BIC <- 0:6
+var_added_bic<-c("Intercept","CHESTX", "FUNCTCLS", "DIGUSE","KSUPP", "TRTMT","EJF_PER")
+
+
+bic_df <- data.frame(Step = steps_BIC, BIC = bic_values, Var=var_added_bic)
+
+bic_plot<-ggplot(bic_df, aes(x = Step, y = BIC)) +
+  geom_line(color = "#A6CEE3",size=1) +  
+  geom_point(color = "#1F78B4", size = 2) +  
+  geom_text_repel(
+    aes(label = paste( round(BIC, 1), Var)), 
+      box.padding = 0.2, 
+      max.overlaps = Inf,
+      direction = "x", 
+      hjust =0, vjust=0,color = "black", size = 3.5) + 
+  labs(title = "BIC Forward Selection",
+       x = "Step Number (Variables Added)",
+       y = "BIC Value") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 12, by = 1))+
+  scale_y_continuous(breaks = c( 7250, 7300, 7350,7400),limits = c(7250, 7400))+
+  theme(axis.text = element_text(size = 12, color ="#0b3b5c" ), 
+        axis.title = element_text(size = 14, color = "#0b3b5c"), 
+        plot.title = element_text(hjust = 0.5, size = 16,color = "#0b3b5c"),
+        panel.border = element_rect(color = "black", fill = NA, size = 1))
