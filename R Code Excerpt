@@ -23,15 +23,12 @@ dig.2[, c( "EJFMETH","RALES","ELEVJVP","PEDEMA","RESTDYS","EXERTDYS","ACTLIMIT",
 head(dig.2)
 sapply(dig.2, class)
 names(dig.2)
-#dig.2<-dig.2[,-9]
-#dig.2<-dig.2[,-39]
 any(is.na(dig.2))
-#dig.2<-na.omit(dig.2)
 dig.2.numeric<-dig.2|> select_if(is.numeric)
 sapply(dig.2.numeric,class)
 
 #Change log labels
-dig.2.numeric<-dig.2.numeric%>%
+dig.2.numeric<-dig.2.numeric|>
     rename(
       CREAT=logcreat,
       BMI=logBMI,
@@ -131,7 +128,7 @@ cluster_plot<-ggplot(combined_k2_dig2,aes(x=PC1,y=PC2,color=Cluster))+
     plot.title =element_text(size = 12, hjust = 0.5,color ="#095b03"),
     panel.border = element_rect(color = "#095b03", fill = NA, size = 1))
 
-##Variable Selection
+#Variable Selection
 
 #AIC,forward selection
 selection_names <- c(colnames(dig.2)[1:34], colnames(dig.2)[36:38])
