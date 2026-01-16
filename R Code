@@ -1,0 +1,594 @@
+---
+title: "GenomicsFinalProj"
+output: pdf_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(BiocManager)
+#BiocManager::install("Biobase")
+library(Biobase)
+library(tidyverse)
+library(ggplot2)
+library(MASS)
+
+#BiocManager::install("affy")
+library(affy)
+library(pheatmap)
+#BiocManager::install("hypeR") 
+#remotes::install_github("lmweber/hypeR")
+library(hypeR)
+library(matrixStats)
+library(caret)
+library(cba)
+library(naivebayes)
+library(mclust)
+library(glmnet)
+library(DESeq2)
+
+#BiocManager::install("DESeq2")
+#BiocManager::install('ComplexHeatmap')
+library(ComplexHeatmap)
+```
+## Loading
+
+```{r Load Sets}
+#Load the RNA-seq gene expression dataset(HNSC) and the gene set
+HNSC_count<-readRDS("C:/Users/smart/OneDrive/BS831 Genomics Data Mining/ProjGenomics/HNSC_htseq_raw_counts_AEvsG1vsG3.rds")
+
+
+HNSC<-readRDS("C:/Users/smart/OneDrive/BS831 Genomics Data Mining/ProjGenomics/HNSC_htseq_raw_counts_AEvsG1vsG3.rds")
+
+#str(HNSC)
+#HNSC$ patient.histological_type
+
+HALLMARK <- msigdb_gsets(species = "Homo sapiens", db_species = "HS", collection = "H")
+
+
+```
+
+
+
+```{r Preprocessing,eval=FALSE}
+#View expression values and log-transform
+# dim(HNSC)
+# hist(exprs(HNSC))
+# exprs(HNSC) <- log2(exprs(HNSC) + 1)
+# hist(exprs(HNSC))
+# 
+# #Select top 10000 MAD(mean absolute deviation) genes
+# mads <- apply(exprs(HNSC), 1, mad) #apply mad to every row
+# top_genes <- order(mads, decreasing = TRUE)[1:10000] 
+# HNSC_top <- HNSC[top_genes, ]
+# dim(HNSC_top)
+# head(HNSC_top)
+# # distribution of expression values after filtering low-expressed genes
+# hist(exprs(HNSC_top), main = "after filtering") #main is title
+# boxplot(as.data.frame(exprs(HNSC)))
+# #Examine Phenotypes
+# table(HNSC_top$grade)
+# pheno_HNSC <- pData(HNSC_top)
+# pheno_g3g1 <- pheno_HNSC[pheno_HNSC$grade %in% c("g1", "g3"), ]
+# 
+# # Subset the ExpressionSet 
+# HNSC_g3g1 <- HNSC_top[, rownames(pheno_g3g1)]
+# table(pData(HNSC_g3g1)$grade)
+# dim(HNSC_g3g1)
+# HNSC_g3g1$grade<-droplevels(HNSC_g3g1$grade)
+
+```
+## Differential Expression Analysis with DESeq2
+```{r DiffDeseq}
+
+pheno_HNSC_count <- pData(HNSC_count)
+pheno_g3g1_count <- pheno_HNSC_count[pheno_HNSC_count$grade %in% c("g1", "g3"), ]
+
+# Subset the ExpressionSet 
+HNSC_g3g1_count <- HNSC_count[, rownames(pheno_g3g1_count)]
+table(pData(HNSC_g3g1_count)$grade)
+#dim(HNSC_g3g1_count)
+
+HNSC_g3g1_count$grade<-droplevels(HNSC_g3g1_count$grade)
+n_zero <- rowSums(exprs(HNSC_g3g1_count))>0
+HNSC_g3g1_nozero<-HNSC_g3g1_count[n_zero,]
+dim(HNSC_g3g1_nozero)
+#head(HNSC_g3g1_nozero)
+
+run_deseq <- function(eset, class_id, grade1, grade2) {
+
+ grade1_idx <- which(pData(eset)[, class_id] == grade1) 
+ grade2_idx <- which(pData(eset)[, class_id] == grade2)
+ eset_compare <- eset[, c(grade1_idx, grade2_idx)] 
+
+ # format dataset for DESeq2
+ col_data <- data.frame(condition = as.character(pData(eset_compare)[, class_id]))
+ dds <- DESeqDataSetFromMatrix(exprs(eset_compare), col_data, formula(~ condition)) #format input, takes formula for model
+
+ # set reference to grade1, otherwise default is alphabetical order
+ dds$condition <- factor(dds$condition, levels = c(grade1, grade2))
+
+
+ # Run DESeq2
+ dds_res <- DESeq(dds)
+ res <- results(dds_res)
+ 
+ res$dispersion <- dispersions(dds_res) #blue red diagram from before
+ # Add mean expression
+  mean_exprs <- rowMeans(log2(exprs(eset_compare) + 1))
+  res$mean_exprs <- mean_exprs
+
+ # return results
+ res_df <- as.data.frame(res)
+  res_df$ensembl_gene_id <- rownames(res_df)
+
+  # Merge to retain info
+  fmeta <- fData(eset_compare)
+  fmeta$ensembl_gene_id <- rownames(fmeta)
+
+  merged <- merge(res_df, fmeta[, c("ensembl_gene_id", "hgnc_symbol")], by = "ensembl_gene_id", all.x = TRUE)
+
+  return(merged)
+}
+# run DESeq2
+deseq<-res_deseq2 <- run_deseq(
+ eset = HNSC_g3g1_nozero,
+ class_id = "grade",
+ grade1 = "g1",
+ grade2 = "g3")
+head(deseq)
+#dim(deseq)
+
+#filter for statistically significant genes
+min_fdr <- 0.05
+deseq_sig <- deseq |>
+ dplyr::filter(padj < min_fdr) |>
+ dplyr::pull(ensembl_gene_id)
+
+deseq_ordered<- deseq |>
+ dplyr::filter(padj < min_fdr) |>
+ arrange(padj)
+
+# dim(deseq_ordered)
+ head(deseq_ordered)
+
+dds <- DESeqDataSetFromMatrix(exprs(HNSC_g3g1_nozero), 
+                             colData = pData(HNSC_g3g1_nozero), 
+                             design = ~ grade)
+dds <- DESeq(dds)
+res_MA_plot <- results(dds, alpha = 0.05)  
+
+if(!dir.exists("images")) dir.create("images")
+png(filename = "images/MA_plot.png", width = 1200, height = 800)
+DESeq2::plotMA(res_MA_plot, alpha = 0.05)
+dev.off()
+
+hist(deseq$mean_exprs)
+HNSC_ranked_signature_test <- deseq |>
+dplyr::arrange(padj) |>
+dplyr::select(hgnc_symbol,padj) |>
+tibble::deframe()
+```
+
+```{r Differential analysis for GSEA, eval=FALSE, include=FALSE}
+# Calculate test statistics and p-values for grade phenotype
+# wrapper function to extract t-statistic and p-value from t.test()
+# t_score <- function(y, x) {
+#   tmp <- t.test(y ~ x)
+#   c(score = tmp$statistic, pval = tmp$p.value)
+# }
+
+# perform differential analysis using t-tests
+HNSC_diff <- t(apply(exprs(HNSC_g3g1), 1, t_score, x = HNSC_g3g1$grade))
+head(HNSC_diff)
+#levels( HNSC_g3g1$grade)
+
+HNSC_diff_symbols <- dplyr::inner_join(
+fData(HNSC_g3g1) |>
+tibble::rownames_to_column() |>
+dplyr::select(rowname, hgnc_symbol),
+data.frame(HNSC_diff) |>
+tibble::rownames_to_column(),
+by = "rowname")
+head(HNSC_diff_symbols)
+
+
+#Ranked signature set
+HNSC_ranked_signature <- HNSC_diff_symbols |> 
+  dplyr::arrange(score.t) |> 
+  dplyr::select(hgnc_symbol, score.t) |> 
+  tibble::deframe()
+
+head(HNSC_ranked_signature)  # most negative: up-regulated in G3 (second category)
+tail(HNSC_ranked_signature)  # most positive t stats: up-regulated in G1 (first category)
+```
+
+
+## Ranking and Entire Compendium Enrichment
+```{r DeSeq Ranking and Enrichment}
+head(deseq)
+dim(deseq)
+HNSC_ranked_signature <- deseq |> 
+  dplyr::arrange(stat) |> 
+  dplyr::select(hgnc_symbol, stat) |> 
+  tibble::deframe()
+
+
+head(HNSC_ranked_signature)  # most negative: up-regulated in G3 (second category)
+tail(HNSC_ranked_signature)  # most positive t stats: up-regulated in G1 (first category)
+
+#Ran hypeR with the entire HALLMARKS compendium and visualized results
+
+ks_obj <- hypeR::hypeR(
+  signature = HNSC_ranked_signature, 
+  genesets = HALLMARK, 
+  test = "kstest",
+  background = nrow(HNSC) #num starting tests
+)
+
+# look at results
+#str(ks_obj)
+#class(ks_obj)
+
+str(ks_obj$data)
+ks_obj$data[1:10, ]
+
+
+# dot plots, enrichment dot plot. Ranked by significance, size is number of genes in set
+png(filename = "images/enrich_dot_plot.png", width = 1600, height = 1200, res=150)
+hypeR::hyp_dots(ks_obj, top = 10)
+dev.off()
+#oxidative phosphorylation
+```
+## Enrichment Test for HALLMARK_OXIDATIVE_PHOSPHORYLATION
+```{r Enrichment Test with HALLMARK_OXIDATIVE_PHOSPHORYLATION}
+gs <- HALLMARK$genesets[["HALLMARK_OXIDATIVE_PHOSPHORYLATION"]] #just symbols
+#length(gs) 
+#head(gs)
+table(deseq$padj < 0.05)
+
+HNSC_deseqDiff_symbol<-deseq
+#dim(HNSC_deseqDiff_symbol|> filter(hgnc_symbol%in% gs))
+
+gene_idx <- match(toupper(gs), toupper(fData(HNSC_count)$hgnc_symbol))
+gene_idx <- gene_idx[!is.na(gene_idx)]
+#184 genes appear in both
+length(gene_idx)
+#compare with gene set. How often is a gene of OXPHOS found in signature set.
+gene_ranks_sym <- HNSC_deseqDiff_symbol |>
+dplyr::mutate(rank = rank(stat)) |>
+dplyr::filter(hgnc_symbol %in% gs) |>
+dplyr::select(hgnc_symbol, rank) |>
+tibble::deframe()
+length(gene_ranks_sym)
+
+head(gene_ranks_sym,3)
+gene_ranks <- rank(HNSC_deseqDiff_symbol[, "stat"])[gene_idx]
+
+png(filename = "images/ks_gs.png", width = 1600, height = 1200, res=150)
+source("ksGenescore.R")
+ks_gs<-ksGenescore(n.x = nrow(HNSC_count), y = gene_ranks_sym, do.plot = TRUE)
+
+ks_gs
+dev.off()
+#significant
+```
+
+## Hierarchical Clustering
+```{r Clustering }
+source("hcopt.R")
+source("misc.R")
+# Hierarchical clustering
+
+#Subset expression matrix
+gene_symbols <- names(gene_ranks_sym)
+length(gene_symbols)
+gene_idnoZ <- which(toupper(fData(HNSC_g3g1_nozero)$hgnc_symbol) %in% toupper(gene_symbols)) #match to oxphos genes
+
+#length(gene_idnoZ)
+
+
+# Subset the expression matrix using the matched indices
+HNSC_subset_count <- HNSC_g3g1_nozero[gene_idnoZ, ]
+#str(HNSC_subset_count)
+# Extract expression matrix
+mat <- exprs(HNSC_subset_count)
+
+# Keep only rows (genes) where all counts are > 0
+keep_genes <- rowSums(mat == 0) == 0
+
+# Subset ExpressionSet accordingly
+HNSC_subset_count <- HNSC_subset_count[keep_genes, ]
+exprs(HNSC_subset_count) <- log2(exprs(HNSC_subset_count))
+exprs(HNSC_subset_count) <- t(scale(t(exprs(HNSC_subset_count)), center = TRUE, scale = FALSE))
+hist(exprs(HNSC_subset_count))
+#str(HNSC_subset_count)
+
+
+# hierarchical clustering for rows and columns
+hc_col <- hcopt(dist(t(exprs(HNSC_subset_count))), method = "ward.D")
+hc_row <- hcopt(as.dist(1 - cor(t(exprs(HNSC_subset_count)))), method = "ward.D")
+
+
+png(filename = "images/Elbow.png", width = 1600, height = 1200, res=150)
+plot(rev(hc_col$height), type = "l",
+     ylab = "Height", xlab = "Merge step (reversed)",
+     main = "Elbow Method for Choosing Number of Clusters",  xlim = c(0, 10))
+
+dev.off()
+hc_clusters <- cutree(hc_col, k = 2)
+
+
+
+hm_ann <- ComplexHeatmap::HeatmapAnnotation(
+  grade = HNSC_subset_count$grade, 
+  hc_cluster = hc_clusters, 
+  col = list(grade = c("g3" = "pink", "g1" = "skyblue"), 
+             hc_cluster = c("1" = "lightgreen", "2" = "gold", "3" = "maroon")), 
+  annotation_name_side = "left"
+)
+
+# create heatmap
+
+Heatmap(
+  exprs(HNSC_subset_count), 
+  name = "expression", 
+  #col = colGradient(c("blue", "white", "red"),9 ), 
+  top_annotation= hm_ann, 
+  cluster_rows = hc_row, 
+  cluster_columns = hc_col, 
+  column_split = 2, 
+  row_split = 2, 
+  show_parent_dend_line = TRUE, 
+  row_title = "", 
+  show_column_names = FALSE, 
+  show_row_names = FALSE
+)
+
+#PCA
+dat_svd <- prcomp(t(exprs(HNSC_subset_count)), scale = TRUE)
+# show variance explained by each component
+t(summary(dat_svd)$importance[, 1:12])
+
+
+# PC analysis
+df <- data.frame(
+  dat_svd$x[, 1:3], 
+  grade = HNSC_subset_count$grade
+)
+range(exprs(HNSC_subset_count))
+# visualize the first 3 components
+point_size <- 1.0
+
+p1 <- ggplot(df, aes(x = PC1, y = PC2, col = grade)) + 
+  geom_point(size = point_size)
+
+p2 <- ggplot(df, aes(x = PC1, y = PC3, col = grade)) + 
+  geom_point(size = point_size)
+
+png(filename = "images/PCA_biplots.png", width = 1600, height = 1200, res=150)
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+
+dev.off()
+# MClust
+
+# Next, we apply mclust to the first 12 PCs, which explain approximately 79% of the variance.
+# We evaluate models with a number of clusters ranging between 2 and 10.
+
+set.seed(120)
+
+dat_mclust <- Mclust(dat_svd$x[, 1:12], G = 2:10)
+summary(dat_mclust)
+
+# We next visualize the heatmap with sample annotation including the mclust clusters.
+
+mclust_colors <- rainbow(n = length(unique(dat_mclust$classification)))
+names(mclust_colors) <- unique(dat_mclust$classification)
+
+hm_ann <- HeatmapAnnotation(
+  grade = HNSC_subset_count$grade,  
+  mclust = dat_mclust$classification, 
+  hc_cluster = hc_clusters, 
+  col = list(grade = c("g3" = "pink", "g1" = "skyblue"), 
+             hc_cluster = c("1" = "lightgreen", "2" = "gold", "3"="maroon"),
+             mclust = mclust_colors), 
+  annotation_name_side = "left"
+)
+png(filename = "images/Mclust.png", width = 1600, height = 1200, res=150)
+# create heatmap
+Heatmap(
+  exprs(HNSC_subset_count), 
+  name = "expression", 
+  #col = colGradient(c("blue", "white", "darkred"), 9), 
+  top_annotation = hm_ann, 
+  cluster_rows = hc_row, 
+  cluster_columns = hc_col, 
+  column_split = 3, 
+  row_split = 2, 
+  show_parent_dend_line = TRUE, 
+  row_title = "", 
+  show_column_names = FALSE, 
+  show_row_names = FALSE
+)
+
+dev.off
+
+
+# Hierarchical clustering (HC) vs. mclust
+
+hc_clusters2 <- cutree(hc_col, k = 2)
+table(hc_clusters2, mclust = dat_mclust$classification)
+
+```
+```{r TrainTest}
+
+# 50/50 train/test split, put aside the test set, and building classifiers on the training set.
+
+library(caret)
+dim(HNSC_subset_count)
+set.seed(56) 
+split_idx <- caret::createDataPartition(HNSC_subset_count$grade, p = 0.5, list = FALSE, times = 1)
+dat_train <- HNSC_subset_count[, split_idx] #subsetting, split index
+dat_test <- HNSC_subset_count[, -split_idx]
+
+dim(HNSC_subset_count)
+dim(dat_train)
+dim(dat_test)
+
+# show class percentages in different splits (stratified)
+# all data class distribution
+round(100 * prop.table(table(all = HNSC_subset_count$grade)))
+# training set class distribution
+round(100 * prop.table(table(train = dat_train$grade)))
+# test set class distribution
+round(100 * prop.table(table(test = dat_test$grade)))
+```
+## Classification Analysis and Cross-V
+```{r Naive}
+
+getModelInfo(model = "naive_bayes")$naive_bayes$parameters
+
+# show the default grid generation for the NB model
+# the function body
+getModelInfo(model = "naive_bayes")$naive_bayes$grid
+
+# set it to what you want it
+nb_grid <- expand.grid(usekernel = FALSE, laplace = 1, adjust = 1)
+nb_grid # a single model
+
+
+# The function trainControl() is used to specify the type of resampling to 
+# perform "model selection" (e.g. cross validation).
+# Since we are not searching over any combination of model parameters, we will 
+# set it to "none".
+nb_control <- trainControl(method = "none") 
+
+
+#Naive bayes model
+nb_train <- caret::train(
+  x = t(exprs(dat_train)), 
+  y = dat_train$grade, 
+  method = "naive_bayes", 
+  trControl = nb_control, 
+  tuneGrid = nb_grid
+)
+
+
+#nb_train
+#names(nb_train)
+
+names(nb_train$finalModel)
+
+# prior and tables
+nb_train$finalModel$prior
+
+head(nb_train$finalModel$tables) 
+
+
+#Classification accuracy of model(within training set).
+
+nb_train_probs <- caret::extractProb(
+  list(model = nb_train)
+)
+head(nb_train_probs)
+
+# compare true values to predictions
+table(obs = nb_train_probs$obs, pred = nb_train_probs$pred) #6 missclassified, confusion matrix
+
+# using caret function, transposed
+nb_train_confusion <- caret::confusionMatrix(
+  data = nb_train_probs$pred, 
+  reference = nb_train_probs$obs, 
+  positive = "g3")
+
+nb_train_confusion
+```
+
+```{r Eval}
+
+# Test set
+nb_test <- predict(nb_train, t(exprs(dat_test)))
+
+nb_test_probs <- caret::extractProb(
+  list(model = nb_train), 
+  testX = t(exprs(dat_test)), 
+  testY = dat_test$grade) |> 
+  dplyr::filter(dataType == "Test")
+
+nb_test_confusion <- caret::confusionMatrix(
+  data = nb_test_probs$pred, 
+  reference = nb_test_probs$obs, 
+  positive = "g3")
+
+nb_test_confusion
+
+
+# When estimating the accuracy on the independent test set rather 
+# than on the training set, reduced accuracy from 0.775 to 0.675.
+
+```
+```{r Features}
+# Reducing the number of features used in the prediction can improve accuracy.
+# score the features by their differential statistic
+scored_features_trn <- apply(
+  exprs(dat_train), 1, function(y, x) t.test(y ~ x)$statistic, x = dat_train$grade) |> 
+  tibble::enframe() |> 
+  dplyr::rename(t.statistic = value)
+
+# pick the top 10 in each direction
+top_N <- 10
+predictor_features_trn <- dplyr::bind_rows(
+  scored_features_trn |>  # up-regulated in LOAD
+    arrange(desc(t.statistic)) |> 
+    dplyr::slice_head(n = top_N), 
+  scored_features_trn |>  # up-regulated in control
+    arrange(t.statistic) |> 
+    dplyr::slice_head(n = top_N)
+)
+
+# create the filtered dataset
+dat_train_flt1 <- 
+  dat_train[match.nona(predictor_features_trn$name, featureNames(dat_train)), ]
+
+#dim(dat_train_flt1)
+
+
+# exprs(dat_train_flt1)[1:5, 1:5]
+# head(pData(dat_train_flt1))
+# head(fData(dat_train_flt1))
+
+# train and test a classifier based on the 20 features selected
+
+# train
+nb_train_flt1 <- caret::train(
+  x = t(exprs(dat_train_flt1)), 
+  y = dat_train_flt1$grade, 
+  method = "naive_bayes", 
+  trControl = nb_control, 
+  tuneGrid = nb_grid
+)
+
+# test
+nb_test_flt1 <- predict(nb_train_flt1, t(exprs(dat_test)))
+
+nb_test_flt1_probs <- caret::extractProb(
+  list(model = nb_train_flt1), 
+  testX = t(exprs(dat_test)), 
+  testY = dat_test$grade) |> 
+  dplyr::filter(dataType == "Test")
+
+nb_test_flt1_confusion <- caret::confusionMatrix(
+  data = nb_test_flt1_probs$pred, 
+  reference = nb_test_flt1_probs$obs, 
+  positive = "g3")
+
+nb_test_flt1_confusion
+
+# McNemar0.75. No evidence that error rates diff between groups
+
+
+
+
+```
+
+
